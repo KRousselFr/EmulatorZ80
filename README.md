@@ -1,4 +1,4 @@
-# Emulator6809
+# EmulatorZ80
 
 Émulateur de machines basées sur le processeur Z80 en C#
 

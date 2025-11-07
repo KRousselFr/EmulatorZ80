@@ -36,12 +36,14 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AddressUnreadableException.cs" />
+    <Compile Include="AddressUnwritableException.cs" />
     <Compile Include="CPU_Z80.cs" />
     <Compile Include="Disasm_Z80.cs" />
     <Compile Include="IMemorySpace_Z80.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="UnknownOpcodeException.cs" />
     <Compile Include="UnknownOpcodePolicy.cs" />
+    <Compile Include="Z80_IntrMode.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

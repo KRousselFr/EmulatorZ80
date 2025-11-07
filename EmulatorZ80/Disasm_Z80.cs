@@ -104,10 +104,6 @@ namespace EmulatorZ80
             return (sbyte)val;
         }
 
-
-
-
-
         /* ~~~~ désassemblage des opcodes ~~~~ */
 
         // opcodes de rotations, décalages
@@ -1226,7 +1222,7 @@ namespace EmulatorZ80
                             dpl, addr);
                     break;
                 case 0x31:
-                    mnemo = "LD HL, ";
+                    mnemo = "LD SP, ";
                     val16 = AddrModeImmediateExtendedValue();
                     args = String.Format("#{0:X4}h", val16);
                     break;
