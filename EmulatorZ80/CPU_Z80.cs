@@ -276,6 +276,12 @@ namespace EmulatorZ80
             this.flagS = ((val & BYTE_MSB_MASK) != 0);
         }
 
+        private void SetSZ16bit(ushort val)
+        {
+            this.flagZ = (val == 0x0000);
+            this.flagS = ((val & WORD_MSB_MASK) != 0);
+        }
+
         private void SetH(byte baseVal, byte diff, byte res)
         {
             this.flagH = ( ((baseVal & BYTE_BCD_MASK) != 0) &&
@@ -300,6 +306,33 @@ namespace EmulatorZ80
                             ((op & BYTE_MSB_MASK) == 0) &&
                             ((res & BYTE_MSB_MASK) != 0) );
             ;
+        }
+
+        private void SetV16bit(ushort baseVal, ushort op, ushort res)
+        {
+            /*
+             * V est activé :
+             * - si deux positifs donnent un négatif, ou :
+             * - si deux négatifs donnent un positif
+             */
+            this.flagPV = ( ((baseVal & WORD_MSB_MASK) != 0) &&
+                            ((op & WORD_MSB_MASK) != 0) &&
+                            ((res & WORD_MSB_MASK) == 0) )
+                       || ( ((baseVal & WORD_MSB_MASK) == 0) &&
+                            ((op & WORD_MSB_MASK) == 0) &&
+                            ((res & WORD_MSB_MASK) != 0) );
+        }
+
+        private void SetP(byte val)
+        {
+            string bin = Convert.ToString(val, 2);
+            /* parité, sur le nombre de bits à 1 de la valeur */
+            int nb1 = 0;
+            foreach (char c in bin) {
+                if (c == '1') nb1++;
+            }
+            this.flagPV = (nb1 == 0) || (nb1 == 2) || (nb1 == 4)
+                       || (nb1 == 6) || (nb1 == 8);
         }
 
         /* ~~~~ implantation des opérations de l'ALU ~~~~ */
@@ -335,6 +368,10 @@ namespace EmulatorZ80
                            ((res & WORD_BCD_MASK) == 0))
                       || ( ((res & WORD_BCD_MASK) == 0) &&
                            ((baseVal & WORD_BCD_MASK) != 0));
+            if (useC) {
+                SetSZ16bit(res);
+                SetV16bit(baseVal, add, res);
+            }
             /* retourne le résultat */
             return res;
         }
@@ -342,23 +379,45 @@ namespace EmulatorZ80
         private byte Do8bitSub(byte baseVal, byte diff, bool useC)
         {
             /* soustraction == addition du nombre opposé */
-            if (useC) diff++;
+            if (useC && this.flagC) diff++;
             byte add = (byte)(-diff);
-            return Do8bitAdd(baseVal, add, false);
+            byte res = Do8bitAdd(baseVal, add, false);
+            this.flagN = true;
+            return res;
+        }
+
+        private ushort Do16bitSub(ushort baseVal, ushort diff)
+        {
+            /* soustraction == addition du nombre opposé */
+            if (this.flagC) diff += 2;
+            // 2 pour contrer la retenue ajoutée dans l'addition
+            ushort add = (ushort)(-diff);
+            ushort res = Do16bitAdd(baseVal, add, true);
+            this.flagN = true;
+            return res;
         }
 
         /* ~~~~ implantation des instructions ~~~~ */
 
         private void InstrANDA(byte val)
         {
-            byte res = (byte)(this.regA & val);
-            SetSZ(res);
-            SetV(this.regA, val, res);
+            this.regA &= val;
+            SetSZ(this.regA);
+            SetP(this.regA);
             this.flagH = true;
             this.flagN = false;
             this.flagC = false;
-            this.regA = res;
             this.cycles++;
+        }
+
+        private void InstrBIT(byte val, int nBit)
+        {
+            byte mask = (byte)(1 << nBit);
+            byte res = (byte)(val & mask);
+            SetSZ(res);
+            SetP(res);
+            this.flagH = true;
+            this.flagN = false;
         }
 
         private void InstrCALL(bool condOK)
@@ -379,6 +438,30 @@ namespace EmulatorZ80
             this.flagN = false;
             this.cycles++;
         }
+
+        // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+        private void InstrCPD()
+        {
+            byte val = ReadMem(this.RegisterHL);
+            Do8bitSub(this.regA, val, false);
+            this.RegisterHL--;
+            this.RegisterBC--;
+            this.flagPV = (this.RegisterBC != 0);
+            this.cycles += 4L;
+        }
+
+        private void InstrCPI()
+        {
+            byte val = ReadMem(this.RegisterHL);
+            Do8bitSub(this.regA, val, false);
+            this.RegisterHL++;
+            this.RegisterBC--;
+            this.flagPV = (this.RegisterBC != 0);
+            this.cycles += 4L;
+        }
+
+        // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
         private void InstrCPLA()
         {
@@ -603,11 +686,41 @@ namespace EmulatorZ80
 
         // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-        private byte InstrIN(byte addr)
+        private byte InstrIN(byte addr, bool updateFlags)
         {
             byte val = InputByte(addr);
             this.cycles++;
+            if (updateFlags) {
+                SetSZ(val);
+                SetP(val);
+                this.flagN = false;
+                this.flagH = false;
+            }
             return val;
+        }
+
+        private void InstrIND()
+        {
+            byte val = InputByte(this.regC);
+            this.regB--;
+            WriteMem(this.RegisterHL, val);
+            this.RegisterHL--;
+            SetSZ(this.regB);
+            SetP(val);
+            this.flagN = true;
+            this.cycles += 3L;
+        }
+
+        private void InstrINI()
+        {
+            byte val = InputByte(this.regC);
+            this.regB--;
+            WriteMem(this.RegisterHL, val);
+            this.RegisterHL++;
+            SetSZ(this.regB);
+            SetP(val);
+            this.flagN = true;
+            this.cycles += 3L;
         }
 
         // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -676,6 +789,34 @@ namespace EmulatorZ80
 
         // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+        private void InstrLDD()
+        {
+            byte val = ReadMem(this.RegisterHL);
+            WriteMem(this.RegisterDE, val);
+            this.RegisterDE--;
+            this.RegisterHL--;
+            this.RegisterBC--;
+            this.flagPV = (this.RegisterBC != 0);
+            this.flagN = false;
+            this.flagH = false;
+            this.cycles += 4L;
+        }
+
+        private void InstrLDI()
+        {
+            byte val = ReadMem(this.RegisterHL);
+            WriteMem(this.RegisterDE, val);
+            this.RegisterDE++;
+            this.RegisterHL++;
+            this.RegisterBC--;
+            this.flagPV = (this.RegisterBC != 0);
+            this.flagN = false;
+            this.flagH = false;
+            this.cycles += 4L;
+        }
+
+        // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
         private void InstrNOP()
         {
             /* ne rien faire, sinon passer des cycles */
@@ -686,13 +827,12 @@ namespace EmulatorZ80
 
         private void InstrORA(byte val)
         {
-            byte res = (byte)(this.regA | val);
-            SetSZ(res);
-            SetV(this.regA, val, res);
+            this.regA |= val;
+            SetSZ(this.regA);
+            SetP(this.regA);
             this.flagH = false;
             this.flagN = false;
             this.flagC = false;
-            this.regA = res;
             this.cycles++;
         }
 
@@ -702,6 +842,30 @@ namespace EmulatorZ80
         {
             OutputByte(addr, val);
             this.cycles++;
+        }
+
+        private void InstrOUTD()
+        {
+            byte val = ReadMem(this.RegisterHL);
+            this.regB--;
+            OutputByte(this.regC, val);
+            this.RegisterHL--;
+            SetSZ(this.regB);
+            SetP(val);
+            this.flagN = true;
+            this.cycles += 3L;
+        }
+
+        private void InstrOUTI()
+        {
+            byte val = ReadMem(this.RegisterHL);
+            this.regB--;
+            OutputByte(this.regC, val);
+            this.RegisterHL++;
+            SetSZ(this.regB);
+            SetP(val);
+            this.flagN = true;
+            this.cycles += 3L;
         }
 
         // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -721,6 +885,15 @@ namespace EmulatorZ80
 
         // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+        private byte InstrRES(byte val, int nBit)
+        {
+            byte mask = (byte)(~(1 << nBit));
+            val &= mask;
+            return val;
+        }
+
+        // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
         private void InstrRET(bool condOK)
         {
             if (condOK) {
@@ -729,7 +902,12 @@ namespace EmulatorZ80
             this.cycles += 2L;
         }
 
-        // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        private void InstrRETI()
+        {
+            this.regPC = PopWord();
+            // TODO signaler la fin de l'interruption matérielle ?! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            this.cycles += 2L;
+        }
 
         private void InstrRETN()
         {
@@ -740,7 +918,7 @@ namespace EmulatorZ80
 
         // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-        private byte InstrRL(byte val)
+        private byte InstrRL(byte val, bool updateSZP)
         {
             bool oldC = this.flagC;
             this.flagC = ((val & BYTE_MSB_MASK) != 0);
@@ -749,10 +927,14 @@ namespace EmulatorZ80
             val <<= 1;
             val &= 0xfe;
             if (oldC) val |= BYTE_LSB_MASK;
+            if (updateSZP) {
+                SetSZ(val);
+                SetP(val);
+            }
             return val;
         }
 
-        private byte InstrRLC(byte val)
+        private byte InstrRLC(byte val, bool updateSZP)
         {
             this.flagC = ((val & BYTE_MSB_MASK) != 0);
             this.FlagN = false;
@@ -760,10 +942,35 @@ namespace EmulatorZ80
             val <<= 1;
             val &= 0xfe;
             if (this.flagC) val |= BYTE_LSB_MASK;
+            if (updateSZP) {
+                SetSZ(val);
+                SetP(val);
+            }
             return val;
         }
 
-        private byte InstrRR(byte val)
+        private void InstrRLD()
+        {
+            ushort addr = this.RegisterHL;
+            byte memVal = ReadMem(addr);
+
+            byte hiMemQuart = (byte)((memVal >> 4) & 0x0f);
+            byte loMemQuart = (byte)(memVal & 0x0f);
+            byte loAQuart = (byte)(this.regA & 0x0f);
+
+            memVal = (byte)((loMemQuart << 4) | loAQuart);
+            this.regA &= 0xf0;
+            this.regA |= hiMemQuart;
+
+            SetSZ(this.regA);
+            SetP(this.regA);
+            this.flagN = false;
+            this.flagH = false;
+            WriteMem(addr, memVal);
+            this.cycles += 6L;
+        }
+
+        private byte InstrRR(byte val, bool updateSZP)
         {
             bool oldC = this.flagC;
             this.flagC = ((val & BYTE_LSB_MASK) != 0);
@@ -772,10 +979,14 @@ namespace EmulatorZ80
             val >>= 1;
             val &= 0x7f;
             if (oldC) val |= BYTE_MSB_MASK;
+            if (updateSZP) {
+                SetSZ(val);
+                SetP(val);
+            }
             return val;
         }
 
-        private byte InstrRRC(byte val)
+        private byte InstrRRC(byte val, bool updateSZP)
         {
             this.flagC = ((val & BYTE_LSB_MASK) != 0);
             this.FlagN = false;
@@ -783,7 +994,32 @@ namespace EmulatorZ80
             val >>= 1;
             val &= 0x7f;
             if (this.flagC) val |= BYTE_MSB_MASK;
+            if (updateSZP) {
+                SetSZ(val);
+                SetP(val);
+            }
             return val;
+        }
+
+        private void InstrRRD()
+        {
+            ushort addr = this.RegisterHL;
+            byte memVal = ReadMem(addr);
+
+            byte hiMemQuart = (byte)((memVal >> 4) & 0x0f);
+            byte loMemQuart = (byte)(memVal & 0x0f);
+            byte loAQuart = (byte)(this.regA & 0x0f);
+
+            memVal = (byte)((loAQuart << 4) | hiMemQuart);
+            this.regA &= 0xf0;
+            this.regA |= loMemQuart;
+
+            SetSZ(this.regA);
+            SetP(this.regA);
+            this.flagN = false;
+            this.flagH = false;
+            WriteMem(addr, memVal);
+            this.cycles += 6L;
         }
 
         private void InstrRST(byte numVector)
@@ -801,15 +1037,59 @@ namespace EmulatorZ80
             this.cycles++;
         }
 
+        private byte InstrSET(byte val, int nBit)
+        {
+            byte mask = (byte)(1 << nBit);
+            val |= mask;
+            return val;
+        }
+
+        private byte InstrSL(byte val)
+        {
+            this.flagC = ((val & BYTE_MSB_MASK) != 0);
+            this.FlagN = false;
+            this.flagH = false;
+            val <<= 1;
+            val &= 0xfe;
+            SetSZ(val);
+            SetP(val);
+            return val;
+        }
+
+        private byte InstrSRA(byte val)
+        {
+            bool neg = ((val & BYTE_MSB_MASK) != 0);
+            this.flagC = ((val & BYTE_LSB_MASK) != 0);
+            this.FlagN = false;
+            this.flagH = false;
+            val >>= 1;
+            val &= 0x7f;
+            if (neg) val |= BYTE_MSB_MASK;
+            SetSZ(val);
+            SetP(val);
+            return val;
+        }
+
+        private byte InstrSRL(byte val)
+        {
+            this.flagC = ((val & BYTE_LSB_MASK) != 0);
+            this.FlagN = false;
+            this.flagH = false;
+            val >>= 1;
+            val &= 0x7f;
+            SetSZ(val);
+            SetP(val);
+            return val;
+        }
+
         private void InstrXORA(byte val)
         {
-            byte res = (byte)(this.regA ^ val);
-            SetSZ(res);
-            SetV(this.regA, val, res);
+            this.regA ^= val;
+            SetSZ(this.regA);
+            SetP(this.regA);
             this.flagH = false;
             this.flagN = false;
             this.flagC = false;
-            this.regA = res;
             this.cycles++;
         }
 
@@ -817,8 +1097,444 @@ namespace EmulatorZ80
 
         private bool ExecCBopcode(byte opcode)
         {
-            ;
-            // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            ushort addr;
+            byte val8;
+
+            switch (opcode) {
+                case 0x00:
+                    // RLC B
+                    this.regB = InstrRLC(this.regB, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x01:
+                    // RLC C
+                    this.regC = InstrRLC(this.regC, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x02:
+                    // RLC D
+                    this.regD = InstrRLC(this.regD, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x03:
+                    // RLC E
+                    this.regE = InstrRLC(this.regE, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x04:
+                    // RLC H
+                    this.regH = InstrRLC(this.regH, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x05:
+                    // RLC L
+                    this.regL = InstrRLC(this.regL, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x06:
+                    // RLC (HL)
+                    addr = this.RegisterHL;
+                    val8 = ReadMem(addr);
+                    val8 = InstrRLC(val8, true);
+                    WriteMem(addr, val8);
+                    this.cycles += 3L;
+                    return true;
+                case 0x07:
+                    // RLC A
+                    this.regA = InstrRLC(this.regA, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x08:
+                    // RRC B
+                    this.regB = InstrRRC(this.regB, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x09:
+                    // RRC C
+                    this.regC = InstrRRC(this.regC, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x0a:
+                    // RRC D
+                    this.regD = InstrRRC(this.regD, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x0b:
+                    // RRC E
+                    this.regE = InstrRRC(this.regE, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x0c:
+                    // RRC H
+                    this.regH = InstrRRC(this.regH, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x0d:
+                    // RRC L
+                    this.regL = InstrRRC(this.regL, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x0e:
+                    // RRC (HL)
+                    addr = this.RegisterHL;
+                    val8 = ReadMem(addr);
+                    val8 = InstrRRC(val8, true);
+                    WriteMem(addr, val8);
+                    this.cycles += 3L;
+                    return true;
+                case 0x0f:
+                    // RRC A
+                    this.regA = InstrRRC(this.regA, true);
+                    this.cycles += 2L;
+                    return true;
+
+                case 0x10:
+                    // RL B
+                    this.regB = InstrRL(this.regB, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x11:
+                    // RL C
+                    this.regC = InstrRL(this.regC, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x12:
+                    // RL D
+                    this.regD = InstrRL(this.regD, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x13:
+                    // RL E
+                    this.regE = InstrRL(this.regE, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x14:
+                    // RL H
+                    this.regH = InstrRL(this.regH, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x15:
+                    // RL L
+                    this.regL = InstrRL(this.regL, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x16:
+                    // RL (HL)
+                    addr = this.RegisterHL;
+                    val8 = ReadMem(addr);
+                    val8 = InstrRL(val8, true);
+                    WriteMem(addr, val8);
+                    this.cycles += 3L;
+                    return true;
+                case 0x17:
+                    // RL A
+                    this.regA = InstrRL(this.regA, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x18:
+                    // RR B
+                    this.regB = InstrRR(this.regB, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x19:
+                    // RR C
+                    this.regC = InstrRR(this.regC, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x1a:
+                    // RR D
+                    this.regD = InstrRR(this.regD, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x1b:
+                    // RR E
+                    this.regE = InstrRR(this.regE, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x1c:
+                    // RR H
+                    this.regH = InstrRR(this.regH, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x1d:
+                    // RR L
+                    this.regL = InstrRR(this.regL, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x1e:
+                    // RR (HL)
+                    addr = this.RegisterHL;
+                    val8 = ReadMem(addr);
+                    val8 = InstrRR(val8, true);
+                    WriteMem(addr, val8);
+                    this.cycles += 3L;
+                    return true;
+                case 0x1f:
+                    // RR A
+                    this.regA = InstrRR(this.regA, true);
+                    this.cycles += 2L;
+                    return true;
+
+                case 0x20:
+                    // SLA B
+                    this.regB = InstrSL(this.regB);
+                    this.cycles += 2L;
+                    return true;
+                case 0x21:
+                    // SLA C
+                    this.regC = InstrSL(this.regC);
+                    this.cycles += 2L;
+                    return true;
+                case 0x22:
+                    // SLA D
+                    this.regD = InstrSL(this.regD);
+                    this.cycles += 2L;
+                    return true;
+                case 0x23:
+                    // SLA E
+                    this.regE = InstrSL(this.regE);
+                    this.cycles += 2L;
+                    return true;
+                case 0x24:
+                    // SLA H
+                    this.regH = InstrSL(this.regH);
+                    this.cycles += 2L;
+                    return true;
+                case 0x25:
+                    // SLA L
+                    this.regL = InstrSL(this.regL);
+                    this.cycles += 2L;
+                    return true;
+                case 0x26:
+                    // SLA (HL)
+                    addr = this.RegisterHL;
+                    val8 = ReadMem(addr);
+                    val8 = InstrSL(val8);
+                    WriteMem(addr, val8);
+                    this.cycles += 3L;
+                    return true;
+                case 0x27:
+                    // SLA A
+                    this.regA = InstrSL(this.regA);
+                    this.cycles += 2L;
+                    return true;
+                case 0x28:
+                    // SRA B
+                    this.regB = InstrSRA(this.regB);
+                    this.cycles += 2L;
+                    return true;
+                case 0x29:
+                    // SRA C
+                    this.regC = InstrSRA(this.regC);
+                    this.cycles += 2L;
+                    return true;
+                case 0x2a:
+                    // SRA D
+                    this.regD = InstrSRA(this.regD);
+                    this.cycles += 2L;
+                    return true;
+                case 0x2b:
+                    // SRA E
+                    this.regE = InstrSRA(this.regE);
+                    this.cycles += 2L;
+                    return true;
+                case 0x2c:
+                    // SRA H
+                    this.regH = InstrSRA(this.regH);
+                    this.cycles += 2L;
+                    return true;
+                case 0x2d:
+                    // SRA L
+                    this.regL = InstrSRA(this.regL);
+                    this.cycles += 2L;
+                    return true;
+                case 0x2e:
+                    // SRA (HL)
+                    addr = this.RegisterHL;
+                    val8 = ReadMem(addr);
+                    val8 = InstrSRA(val8);
+                    WriteMem(addr, val8);
+                    this.cycles += 3L;
+                    return true;
+                case 0x2f:
+                    // SRA A
+                    this.regB = InstrSRA(this.regB);
+                    this.cycles += 2L;
+                    return true;
+
+                case 0x30:
+                    // SLL B
+                    this.regB = InstrSL(this.regB);
+                    this.cycles += 2L;
+                    return true;
+                case 0x31:
+                    // SLL C
+                    this.regC = InstrSL(this.regC);
+                    this.cycles += 2L;
+                    return true;
+                case 0x32:
+                    // SLL D
+                    this.regD = InstrSL(this.regD);
+                    this.cycles += 2L;
+                    return true;
+                case 0x33:
+                    // SLL E
+                    this.regE = InstrSL(this.regE);
+                    this.cycles += 2L;
+                    return true;
+                case 0x34:
+                    // SLL H
+                    this.regH = InstrSL(this.regH);
+                    this.cycles += 2L;
+                    return true;
+                case 0x35:
+                    // SLL L
+                    this.regL = InstrSL(this.regL);
+                    this.cycles += 2L;
+                    return true;
+                case 0x36:
+                    // SLL (HL)
+                    addr = this.RegisterHL;
+                    val8 = ReadMem(addr);
+                    val8 = InstrSL(val8);
+                    WriteMem(addr, val8);
+                    this.cycles += 3L;
+                    return true;
+                case 0x37:
+                    // SLL A
+                    this.regA = InstrSL(this.regA);
+                    this.cycles += 2L;
+                    return true;
+                case 0x38:
+                    // SRL B
+                    this.regB = InstrSRL(this.regB);
+                    this.cycles += 2L;
+                    return true;
+                case 0x39:
+                    // SRL C
+                    this.regC = InstrSRL(this.regC);
+                    this.cycles += 2L;
+                    return true;
+                case 0x3a:
+                    // SRL D
+                    this.regD = InstrSRL(this.regD);
+                    this.cycles += 2L;
+                    return true;
+                case 0x3b:
+                    // SRL E
+                    this.regE = InstrSRL(this.regE);
+                    this.cycles += 2L;
+                    return true;
+                case 0x3c:
+                    // SRL H
+                    this.regH = InstrSRL(this.regH);
+                    this.cycles += 2L;
+                    return true;
+                case 0x3d:
+                    // SRL L
+                    this.regL = InstrSRL(this.regL);
+                    this.cycles += 2L;
+                    return true;
+                case 0x3e:
+                    // SRL (HL)
+                    addr = this.RegisterHL;
+                    val8 = ReadMem(addr);
+                    val8 = InstrSRL(val8);
+                    WriteMem(addr, val8);
+                    this.cycles += 3L;
+                    return true;
+                case 0x3f:
+                    // SRL A
+                    this.regA = InstrSRL(this.regA);
+                    this.cycles += 2L;
+                    return true;
+            }
+
+            if (opcode >= 0x40) {
+                int src = opcode & 0x07;
+                switch (src) {
+                    case 0:
+                        val8 = this.regB;
+                        break;
+                    case 1:
+                        val8 = this.regC;
+                        break;
+                    case 2:
+                        val8 = this.regD;
+                        break;
+                    case 3:
+                        val8 = this.regE;
+                        break;
+                    case 4:
+                        val8 = this.regH;
+                        break;
+                    case 5:
+                        val8 = this.regL;
+                        break;
+                    case 6:
+                        addr = this.RegisterHL;
+                        val8 = ReadMem(addr);
+                        this.cycles++;
+                        break;
+                    case 7:
+                        val8 = this.regA;
+                        break;
+                    default:
+                        throw new ArithmeticException();
+                }
+                int nBit = ((opcode & 0x38) >> 3);
+                if (opcode <= 0x7f) {
+                    // BIT b, NN
+                    InstrBIT(val8, nBit);
+                    this.cycles += 2L;
+                    return true;
+                } else if (opcode <= 0xbf) {
+                    // RES b, NN
+                    val8 = InstrRES(val8, nBit);
+                } else if (opcode <= 0xff) {
+                    // SET b, NN
+                    val8 = InstrSET(val8, nBit);
+                }
+                switch (src) {
+                    case 0:
+                        this.regB = val8;
+                        this.cycles += 2L;
+                        break;
+                    case 1:
+                        this.regC = val8;
+                        this.cycles += 2L;
+                        break;
+                    case 2:
+                        this.regD = val8;
+                        this.cycles += 2L;
+                        break;
+                    case 3:
+                        this.regE = val8;
+                        this.cycles += 2L;
+                        break;
+                    case 4:
+                        this.regH = val8;
+                        this.cycles += 2L;
+                        break;
+                    case 5:
+                        this.regL = val8;
+                        this.cycles += 2L;
+                        break;
+                    case 6:
+                        addr = this.RegisterHL;
+                        WriteMem(addr, val8);
+                        this.cycles += 2L;
+                        break;
+                    case 7:
+                        this.regA = val8;
+                        this.cycles += 2L;
+                        break;
+                }
+                return true;
+            }
+
+            /* normalement impossible */
+            return false;
         }
 
         private bool ExecDDopcode(byte opcode)
@@ -829,8 +1545,362 @@ namespace EmulatorZ80
 
         private bool ExecEDopcode(byte opcode)
         {
-            ;
-            // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            byte val8;
+            ushort addr;
+
+            switch (opcode) {
+
+                case 0x40:
+                    // IN B, (C)
+                    this.regB = InstrIN(this.regC, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x41:
+                    // OUT (C), B
+                    InstrOUT(this.regC, this.regB);
+                    this.cycles += 2L;
+                    return true;
+                case 0x42:
+                    // SBC HL, BC
+                    this.RegisterHL = Do16bitSub(this.RegisterHL,
+                                                 this.RegisterBC);
+                    this.cycles += 9L;
+                    return true;
+                case 0x43:
+                    // LD (nnnn), BC
+                    addr = AddrModeImmediateExtendedValue();
+                    WriteMem(addr, this.regC);
+                    addr++;
+                    WriteMem(addr, this.regB);
+                    this.cycles += 2L;
+                    return true;
+                case 0x44:
+                    // NEG A
+                    val8 = this.regA;
+                    this.regA = Do8bitSub(0, this.regA, false);
+                    this.flagC = (val8 != 0x00);
+                    this.cycles += 2L;
+                    return true;
+                case 0x45:
+                    // RETN
+                    InstrRETN();
+                    return true;
+                case 0x46:
+                    // IM 0
+                    InstrIM(Z80_IntrMode.MODE_0);
+                    return true;
+                case 0x47:
+                    // LD I, A
+                    this.regI = this.regA;
+                    this.cycles += 3L;
+                    return true;
+                case 0x48:
+                    // IN C, (C)
+                    this.regC = InstrIN(this.regC, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x49:
+                    // OUT (C), C
+                    InstrOUT(this.regC, this.regC);
+                    this.cycles += 2L;
+                    return true;
+                case 0x4a:
+                    // ADC HL, BC
+                    this.RegisterHL = Do16bitAdd(this.RegisterHL,
+                                                 this.RegisterBC,
+                                                 true);
+                    this.cycles += 9L;
+                    return true;
+                case 0x4b:
+                    // LD BC, (nnnn)
+                    addr = AddrModeImmediateExtendedValue();
+                    this.regC = ReadMem(addr);
+                    addr++;
+                    this.regB = ReadMem(addr);
+                    this.cycles += 2L;
+                    return true;
+                case 0x4d:
+                    // RETI
+                    InstrRETI();
+                    return true;
+                case 0x4f:
+                    // LD R, A
+                    this.regR = this.regA;
+                    this.cycles += 3L;
+                    return true;
+
+                case 0x50:
+                    // IN D, (C)
+                    this.regD = InstrIN(this.regC, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x51:
+                    // OUT (C), D
+                    InstrOUT(this.regC, this.regD);
+                    this.cycles += 2L;
+                    return true;
+                case 0x52:
+                    // SBC HL, DE
+                    this.RegisterHL = Do16bitSub(this.RegisterHL,
+                                                 this.RegisterDE);
+                    this.cycles += 9L;
+                    return true;
+                case 0x53:
+                    // LD (nnnn), DE
+                    addr = AddrModeImmediateExtendedValue();
+                    WriteMem(addr, this.regE);
+                    addr++;
+                    WriteMem(addr, this.regD);
+                    this.cycles += 2L;
+                    return true;
+                case 0x56:
+                    // IM 1
+                    InstrIM(Z80_IntrMode.MODE_1);
+                    return true;
+                case 0x57:
+                    // LD A, I
+                    InstrLDAI();
+                    return true;
+                case 0x58:
+                    // IN E, (C)
+                    this.regE = InstrIN(this.regC, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x59:
+                    // OUT (C), E
+                    InstrOUT(this.regC, this.regE);
+                    this.cycles += 2L;
+                    return true;
+                case 0x5a:
+                    // ADC HL, DE
+                    this.RegisterHL = Do16bitAdd(this.RegisterHL,
+                                                 this.RegisterDE,
+                                                 true);
+                    this.cycles += 9L;
+                    return true;
+                case 0x5b:
+                    // LD DE, (nnnn)
+                    addr = AddrModeImmediateExtendedValue();
+                    this.regE = ReadMem(addr);
+                    addr++;
+                    this.regD = ReadMem(addr);
+                    this.cycles += 2L;
+                    return true;
+                case 0x5e:
+                    // IM 2
+                    InstrIM(Z80_IntrMode.MODE_2);
+                    return true;
+                case 0x5f:
+                    // LD A, R
+                    InstrLDAR();
+                    return true;
+
+                case 0x60:
+                    // IN H, (C)
+                    this.regH = InstrIN(this.regC, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x61:
+                    // OUT (C), H
+                    InstrOUT(this.regC, this.regH);
+                    this.cycles += 2L;
+                    return true;
+                case 0x62:
+                    // SBC HL, HL
+                    this.RegisterHL = Do16bitSub(this.RegisterHL,
+                                                 this.RegisterHL);
+                    this.cycles += 9L;
+                    return true;
+                case 0x63:
+                    // LD (nnnn), HL
+                    addr = AddrModeImmediateExtendedValue();
+                    WriteMem(addr, this.regL);
+                    addr++;
+                    WriteMem(addr, this.regH);
+                    this.cycles += 2L;
+                    return true;
+                case 0x67:
+                    // RRD
+                    InstrRRD();
+                    return true;
+                case 0x68:
+                    // IN L, (C)
+                    this.regL = InstrIN(this.regC, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x69:
+                    // OUT (C), L
+                    InstrOUT(this.regC, this.regL);
+                    this.cycles += 2L;
+                    return true;
+                case 0x6a:
+                    // ADC HL, BC
+                    this.RegisterHL = Do16bitAdd(this.RegisterHL,
+                                                 this.RegisterHL,
+                                                 true);
+                    this.cycles += 9L;
+                    return true;
+                case 0x6b:
+                    // LD HL, (nnnn)
+                    addr = AddrModeImmediateExtendedValue();
+                    this.regL = ReadMem(addr);
+                    addr++;
+                    this.regH = ReadMem(addr);
+                    this.cycles += 2L;
+                    return true;
+                case 0x6f:
+                    // RLD
+                    InstrRLD();
+                    return true;
+
+                case 0x70:
+                    // IN F, (C) --- opcode non officiel !
+                    this.RegisterF = InstrIN(this.regC, true);
+                    this.cycles += 2L;
+                    return true;  // ou false ?
+                case 0x72:
+                    // SBC HL, SP
+                    this.RegisterHL = Do16bitSub(this.RegisterHL,
+                                                 this.regSP);
+                    this.cycles += 9L;
+                    return true;
+                case 0x73:
+                    // LD (nnnn), SP
+                    addr = AddrModeImmediateExtendedValue();
+                    WriteMem(addr, LoByte(this.regSP));
+                    addr++;
+                    WriteMem(addr, HiByte(this.regSP));
+                    this.cycles += 2L;
+                    return true;
+                case 0x78:
+                    // IN A, (C)
+                    this.regA = InstrIN(this.regC, true);
+                    this.cycles += 2L;
+                    return true;
+                case 0x79:
+                    // OUT (C), A
+                    InstrOUT(this.regC, this.regA);
+                    this.cycles += 2L;
+                    return true;
+                case 0x7a:
+                    // ADC HL, SP
+                    this.RegisterHL = Do16bitAdd(this.RegisterHL,
+                                                 this.regSP,
+                                                 true);
+                    this.cycles += 9L;
+                    return true;
+                case 0x7b:
+                    // LD SP, (nnnn)
+                    addr = AddrModeImmediateExtendedValue();
+                    byte lo = ReadMem(addr);
+                    addr++;
+                    byte hi = ReadMem(addr);
+                    this.regSP = MakeWord(hi, lo);
+                    this.cycles += 2L;
+                    return true;
+
+                case 0xa0:
+                    // LDI
+                    InstrLDI();
+                    return true;
+                case 0xa1:
+                    // CPI
+                    InstrCPI();
+                    return true;
+                case 0xa2:
+                    // INI
+                    InstrINI();
+                    return true;
+                case 0xa3:
+                    // OUTI
+                    InstrOUTI();
+                    return true;
+                case 0xa8:
+                    // LDD
+                    InstrLDD();
+                    return true;
+                case 0xa9:
+                    // CPD
+                    InstrCPD();
+                    return true;
+                case 0xaa:
+                    // IND
+                    InstrIND();
+                    return true;
+                case 0xab:
+                    // OUTD
+                    InstrOUTD();
+                    return true;
+
+                case 0xb0:
+                    // LDIR
+                    InstrLDI();
+                    if (this.flagPV) {
+                        this.regPC -= 2;
+                        this.cycles += 5L;
+                    }
+                    return true;
+                case 0xb1:
+                    // CPIR
+                    InstrCPI();
+                    if (this.flagPV && !(this.flagZ)) {
+                        this.regPC -= 2;
+                        this.cycles += 5L;
+                    }
+                    return true;
+                case 0xb2:
+                    // INIR
+                    InstrINI();
+                    if (!(this.flagZ)) {
+                        this.regPC -= 2;
+                        this.cycles += 5L;
+                    }
+                    return true;
+                case 0xb3:
+                    // OTIR
+                    InstrOUTI();
+                    if (!(this.flagZ)) {
+                        this.regPC -= 2;
+                        this.cycles += 5L;
+                    }
+                    return true;
+                case 0xb8:
+                    // LDDR
+                    InstrLDD();
+                    if (this.flagPV) {
+                        this.regPC -= 2;
+                        this.cycles += 5L;
+                    }
+                    return true;
+                case 0xb9:
+                    // CPDR
+                    InstrCPD();
+                    if (this.flagPV && !(this.flagZ)) {
+                        this.regPC -= 2;
+                        this.cycles += 5L;
+                    }
+                    return true;
+                case 0xba:
+                    // INDR
+                    InstrIND();
+                    if (!(this.flagZ)) {
+                        this.regPC -= 2;
+                        this.cycles += 5L;
+                    }
+                    return true;
+                case 0xbb:
+                    // OTDR
+                    InstrOUTD();
+                    if (!(this.flagZ)) {
+                        this.regPC -= 2;
+                        this.cycles += 5L;
+                    }
+                    return true;
+
+            }
+
+            /* si on arrive ici, l'opcode rencontré était invalide ! */
+            return false;
         }
 
         private bool ExecFDopcode(byte opcode)
@@ -879,7 +1949,7 @@ namespace EmulatorZ80
                     return true;
                 case 0x07:
                     // RLCA
-                    this.regA = InstrRLC(this.regA);
+                    this.regA = InstrRLC(this.regA, false);
                     this.cycles++;
                     return true;
                 case 0x08:
@@ -918,7 +1988,7 @@ namespace EmulatorZ80
                     return true;
                 case 0x0f:
                     // RRCA
-                    this.regA = InstrRRC(this.regA);
+                    this.regA = InstrRRC(this.regA, false);
                     this.cycles++;
                     return true;
 
@@ -956,7 +2026,7 @@ namespace EmulatorZ80
                     return true;
                 case 0x17:
                     // RLA
-                    this.regA = InstrRL(this.regA);
+                    this.regA = InstrRL(this.regA, false);
                     this.cycles++;
                     return true;
                 case 0x18:
@@ -966,7 +2036,7 @@ namespace EmulatorZ80
                 case 0x19:
                     // ADD HL, DE
                     this.RegisterHL = Do16bitAdd(this.RegisterHL,
-                                                 MakeWord(this.regD, this.regE),
+                                                 this.RegisterDE,
                                                  false);
                     this.cycles += 8L;
                     return true;
@@ -995,7 +2065,7 @@ namespace EmulatorZ80
                     return true;
                 case 0x1f:
                     // RRA
-                    this.regA = InstrRR(this.regA);
+                    this.regA = InstrRR(this.regA, false);
                     this.cycles++;
                     return true;
 
@@ -1935,7 +3005,7 @@ namespace EmulatorZ80
                 case 0xdb:
                     // IN A, (nn)
                     port = AddrModeImmediateValue();
-                    this.regA = InstrIN(port);
+                    this.regA = InstrIN(port, false);
                     return true;
                 case 0xdc:
                     // CALL C, nnnn
@@ -2091,6 +3161,7 @@ namespace EmulatorZ80
                     return true;
             }
 
+            /* normalement impossible */
             return false;
         }
 
@@ -2212,6 +3283,7 @@ namespace EmulatorZ80
                 // lance la réponse à l'interruption
                 this.cycles += 2;
                 // désactive toute interruption masquable
+                this.iff2 = this.iff1;
                 this.iff1 = false;
                 // saute au sous-programme de réponse aux NMI
                 PushWord(this.regPC);
@@ -2226,8 +3298,6 @@ namespace EmulatorZ80
                     this.halted = false;
                     // lance la réponse à l'interruption
                     this.cycles += 2;
-                    // enregistre le PC actuel
-                    PushWord(this.regPC);
                     // désactive toute autre interruption masquable
                     this.iff1 = this.iff2 = false;
                     // en fonction du mode IRQ actuel...
@@ -2237,9 +3307,14 @@ namespace EmulatorZ80
                             // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
                             break;
                         case Z80_IntrMode.MODE_1:
+                            // enregistre le PC actuel
+                            PushWord(this.regPC);
+                            // sauta à l'adresse de traitement INT
                             this.regPC = IRQ_PC_ADDRESS;
                             break;
                         case Z80_IntrMode.MODE_2:
+                            // enregistre le PC actuel
+                            PushWord(this.regPC);
                             // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
                             this.regPC = MakeWord(this.regI, /* databus */0);
                             break;
@@ -2763,4 +3838,5 @@ namespace EmulatorZ80
 
     }
 }
+
 
