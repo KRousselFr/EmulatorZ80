@@ -43,7 +43,7 @@ namespace EmulatorZ80
             0x0000, 0x0008, 0x0010, 0x0018, 0x0020, 0x0028, 0x0030, 0x0038
         };
 
-        // masques de sélection de bit
+        // masques de sélection de bit(s)
         const byte BYTE_MSB_MASK = 0x80;
         const byte BYTE_ABS_MASK = 0x7f;
         const byte BYTE_BCD_MASK = 0x08;
@@ -238,6 +238,26 @@ namespace EmulatorZ80
             byte val = ReadMem(this.regPC);
             this.regPC++;
             return (sbyte)val;
+        }
+
+        private ushort AddrModeIXindirectDisplacementAddress()
+        {
+            sbyte dpl = AddrModeIndexDisplacement();
+            return (ushort)(this.regIX + dpl);
+        }
+        private byte AddrModeIXindirectDisplacementValue()
+        {
+            return ReadMem(AddrModeIXindirectDisplacementAddress());
+        }
+
+        private ushort AddrModeIYindirectDisplacementAddress()
+        {
+            sbyte dpl = AddrModeIndexDisplacement();
+            return (ushort)(this.regIY + dpl);
+        }
+        private byte AddrModeIYindirectDisplacementValue()
+        {
+            return ReadMem(AddrModeIYindirectDisplacementAddress());
         }
 
         /* ~~~~ accès à la pile ~~~~ */
@@ -699,6 +719,29 @@ namespace EmulatorZ80
             return val;
         }
 
+        // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+        private byte InstrINC(byte val)
+        {
+            byte oldVal = val;
+            val++;
+            SetSZ(val);
+            this.flagPV = (oldVal == 0x7f);
+            this.flagN = false;
+            SetH(oldVal, 1, val);
+            this.cycles++;
+            return val;
+        }
+
+        private ushort InstrINC16(ushort val)
+        {
+            val++;
+            this.cycles += 3L;
+            return val;
+        }
+
+        // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
         private void InstrIND()
         {
             byte val = InputByte(this.regC);
@@ -721,27 +764,6 @@ namespace EmulatorZ80
             SetP(val);
             this.flagN = true;
             this.cycles += 3L;
-        }
-
-        // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-        private byte InstrINC(byte val)
-        {
-            byte oldVal = val;
-            val++;
-            SetSZ(val);
-            this.flagPV = (oldVal == 0x7f);
-            this.flagN = false;
-            SetH(oldVal, 1, val);
-            this.cycles++;
-            return val;
-        }
-
-        private ushort InstrINC16(ushort val)
-        {
-            val++;
-            this.cycles += 3L;
-            return val;
         }
 
         // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -1539,8 +1561,434 @@ namespace EmulatorZ80
 
         private bool ExecDDopcode(byte opcode)
         {
-            ;
-            // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            byte val8;
+            ushort addr;
+
+            switch (opcode) {
+                case 0x09:
+                    // ADD IX, BC
+                    this.regIX = Do16bitAdd(this.regIX,
+                                            this.RegisterBC,
+                                            false);
+                    this.cycles += 9L;
+                    return true;
+
+                case 0x19:
+                    // ADD IX, DE
+                    this.regIX = Do16bitAdd(this.regIX,
+                                            this.RegisterDE,
+                                            false);
+                    this.cycles += 9L;
+                    return true;
+
+                case 0x21:
+                    // LD IX, #nnnn
+                    this.regIX = AddrModeImmediateExtendedValue();
+                    this.cycles += 2L;
+                    break;
+                case 0x22:
+                    // LD (nnnn), IX
+                    addr = AddrModeImmediateExtendedValue();
+                    WriteMem(addr, LoByte(this.regIX));
+                    addr++;
+                    WriteMem(addr, HiByte(this.regIX));
+                    this.cycles += 2L;
+                    return true;
+                case 0x23:
+                    // INC IX
+                    this.regIX = InstrINC16(this.regIX);
+                    this.cycles++;
+                    return true;
+                case 0x29:
+                    // ADD IX, IX
+                    this.regIX = Do16bitAdd(this.regIX,
+                                            this.regIX,
+                                            false);
+                    this.cycles += 9L;
+                    return true;
+                case 0x2a:
+                    // LD IX, (nnnn)
+                    addr = AddrModeImmediateExtendedValue();
+                    byte lo = ReadMem(addr);
+                    addr++;
+                    byte hi = ReadMem(addr);
+                    this.regIX = MakeWord(hi, lo);
+                    this.cycles += 2L;
+                    return true;
+                case 0x2b:
+                    // DEC IX
+                    this.regIX = InstrDEC16(this.regIX);
+                    this.cycles++;
+                    return true;
+
+                case 0x34:
+                    // INC (IX + d)
+                    addr = AddrModeIXindirectDisplacementAddress();
+                    val8 = ReadMem(addr);
+                    val8 = InstrINC(val8);
+                    WriteMem(addr, val8);
+                    this.cycles += 14L;
+                    return true;
+                case 0x35:
+                    // DEC (IX + d)
+                    addr = AddrModeIXindirectDisplacementAddress();
+                    val8 = ReadMem(addr);
+                    val8 = InstrDEC(val8);
+                    WriteMem(addr, val8);
+                    this.cycles += 14L;
+                    return true;
+                case 0x36:
+                    // LD (IX + d), #nn
+                    addr = AddrModeIXindirectDisplacementAddress();
+                    val8 = AddrModeImmediateValue();
+                    WriteMem(addr, val8);
+                    this.cycles += 7L;
+                    return true;
+                case 0x39:
+                    // ADD IX, SP
+                    this.regIX = Do16bitAdd(this.regIX,
+                                            this.regSP,
+                                            false);
+                    this.cycles += 9L;
+                    return true;
+
+                case 0x46:
+                    // LD B, (IX + d)
+                    this.regB = AddrModeIXindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+                case 0x4e:
+                    // LD C, (IX + d)
+                    this.regC = AddrModeIXindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+
+                case 0x56:
+                    // LD D, (IX + d)
+                    this.regD = AddrModeIXindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+                case 0x5e:
+                    // LD E, (IX + d)
+                    this.regE = AddrModeIXindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+
+                case 0x66:
+                    // LD H, (IX + d)
+                    this.regH = AddrModeIXindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+                case 0x6e:
+                    // LD L, (IX + d)
+                    this.regL = AddrModeIXindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+
+                case 0x70:
+                    // LD (IX + d), B
+                    addr = AddrModeIXindirectDisplacementAddress();
+                    WriteMem(addr, this.regB);
+                    this.cycles += 7L;
+                    return true;
+                case 0x71:
+                    // LD (IX + d), C
+                    addr = AddrModeIXindirectDisplacementAddress();
+                    WriteMem(addr, this.regC);
+                    this.cycles += 7L;
+                    return true;
+                case 0x72:
+                    // LD (IX + d), D
+                    addr = AddrModeIXindirectDisplacementAddress();
+                    WriteMem(addr, this.regD);
+                    this.cycles += 7L;
+                    return true;
+                case 0x73:
+                    // LD (IX + d), E
+                    addr = AddrModeIXindirectDisplacementAddress();
+                    WriteMem(addr, this.regE);
+                    this.cycles += 7L;
+                    return true;
+                case 0x74:
+                    // LD (IX + d), H
+                    addr = AddrModeIXindirectDisplacementAddress();
+                    WriteMem(addr, this.regH);
+                    this.cycles += 7L;
+                    return true;
+                case 0x75:
+                    // LD (IX + d), L
+                    addr = AddrModeIXindirectDisplacementAddress();
+                    WriteMem(addr, this.regL);
+                    this.cycles += 7L;
+                    return true;
+                case 0x77:
+                    // LD (IX + d), A
+                    addr = AddrModeIXindirectDisplacementAddress();
+                    WriteMem(addr, this.regA);
+                    this.cycles += 7L;
+                    return true;
+                case 0x7e:
+                    // LD A, (IX + d)
+                    this.regA = AddrModeIXindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+
+                case 0x86:
+                    // ADD A, (IX + d)
+                    val8 = AddrModeIXindirectDisplacementValue();
+                    this.regA = Do8bitAdd(this.regA, val8, false);
+                    this.cycles += 7L;
+                    return true;
+                case 0x8e:
+                    // ADC A, (IX + d)
+                    val8 = AddrModeIXindirectDisplacementValue();
+                    this.regA = Do8bitAdd(this.regA, val8, true);
+                    this.cycles += 7L;
+                    return true;
+
+                case 0x96:
+                    // SUB A, (IX + d)
+                    val8 = AddrModeIXindirectDisplacementValue();
+                    this.regA = Do8bitSub(this.regA, val8, false);
+                    this.cycles += 7L;
+                    return true;
+                case 0x9e:
+                    // SBC A, (IX + d)
+                    val8 = AddrModeIXindirectDisplacementValue();
+                    this.regA = Do8bitSub(this.regA, val8, true);
+                    this.cycles += 7L;
+                    return true;
+
+                case 0xa6:
+                    // AND A, (IX + d)
+                    val8 = AddrModeIXindirectDisplacementValue();
+                    InstrANDA(val8);
+                    this.cycles += 6L;
+                    return true;
+                case 0xae:
+                    // XOR A, (IX + d)
+                    val8 = AddrModeIXindirectDisplacementValue();
+                    InstrXORA(val8);
+                    this.cycles += 6L;
+                    return true;
+
+                case 0xb6:
+                    // OR A, (IX + d)
+                    val8 = AddrModeIXindirectDisplacementValue();
+                    InstrORA(val8);
+                    this.cycles += 6L;
+                    return true;
+                case 0xbe:
+                    // CP A, (IX + d)
+                    val8 = AddrModeIXindirectDisplacementValue();
+                    Do8bitSub(this.regA, val8, false);
+                    this.cycles += 7L;
+                    return true;
+
+                case 0xcb:
+                    // rotations, décalages et manipulations
+                    // bit-à-bit via IX
+                    addr = AddrModeIXindirectDisplacementAddress();
+                    val8 = ReadMem(addr);
+                    byte subOpcode = ReadMem(this.regPC);
+                    this.regPC++;
+                    switch (subOpcode) {
+                        case 0x06:
+                            // RLC (IX + d)
+                            val8 = InstrRLC(val8, true);
+                            this.cycles += 5L;
+                            break;
+                        case 0x0e:
+                            // RRC (IX + d)
+                            val8 = InstrRRC(val8, true);
+                            this.cycles += 5L;
+                            break;
+                        case 0x16:
+                            // RL (IX + d)
+                            val8 = InstrRL(val8, true);
+                            this.cycles += 5L;
+                            break;
+                        case 0x1e:
+                            // RR (IX + d)
+                            val8 = InstrRR(val8, true);
+                            this.cycles += 5L;
+                            break;
+                        case 0x26:
+                            // SLA (IX + d)
+                            val8 = InstrSL(val8);
+                            this.cycles += 5L;
+                            break;
+                        case 0x2e:
+                            // SRA (IX + d)
+                            val8 = InstrSRA(val8);
+                            this.cycles += 5L;
+                            break;
+                        case 0x36:
+                            // SLL (IX + d)
+                            val8 = InstrSL(val8);
+                            this.cycles += 5L;
+                            break;
+                        case 0x3e:
+                            // SRL (IX + d)
+                            val8 = InstrSRL(val8);
+                            this.cycles += 5L;
+                            break;
+                        case 0x46:
+                            // BIT 0, (IX + d)
+                            InstrBIT(val8, 0);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x4e:
+                            // BIT 1, (IX + d)
+                            InstrBIT(val8, 1);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x56:
+                            // BIT 2, (IX + d)
+                            InstrBIT(val8, 2);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x5e:
+                            // BIT 3, (IX + d)
+                            InstrBIT(val8, 3);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x66:
+                            // BIT 4, (IX + d)
+                            InstrBIT(val8, 4);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x6e:
+                            // BIT 5, (IX + d)
+                            InstrBIT(val8, 5);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x76:
+                            // BIT 6, (IX + d)
+                            InstrBIT(val8, 6);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x7e:
+                            // BIT 7, (IX + d)
+                            InstrBIT(val8, 7);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x86:
+                            // RES 0, (IX + d)
+                            val8 = InstrRES(val8, 0);
+                            this.cycles += 5L;
+                            break;
+                        case 0x8e:
+                            // RES 1, (IX + d)
+                            val8 = InstrRES(val8, 1);
+                            this.cycles += 5L;
+                            break;
+                        case 0x96:
+                            // RES 2, (IX + d)
+                            val8 = InstrRES(val8, 2);
+                            this.cycles += 5L;
+                            break;
+                        case 0x9e:
+                            // RES 3, (IX + d)
+                            val8 = InstrRES(val8, 3);
+                            this.cycles += 5L;
+                            break;
+                        case 0xa6:
+                            // RES 4, (IX + d)
+                            val8 = InstrRES(val8, 4);
+                            this.cycles += 5L;
+                            break;
+                        case 0xae:
+                            // RES 5, (IX + d)
+                            val8 = InstrRES(val8, 5);
+                            this.cycles += 5L;
+                            break;
+                        case 0xb6:
+                            // RES 6, (IX + d)
+                            val8 = InstrRES(val8, 6);
+                            this.cycles += 5L;
+                            break;
+                        case 0xbe:
+                            // RES 7, (IX + d)
+                            val8 = InstrRES(val8, 7);
+                            this.cycles += 5L;
+                            break;
+                        case 0xc6:
+                            // SET 0, (IX + d)
+                            val8 = InstrSET(val8, 0);
+                            this.cycles += 5L;
+                            break;
+                        case 0xce:
+                            // SET 1, (IX + d)
+                            val8 = InstrSET(val8, 1);
+                            this.cycles += 5L;
+                            break;
+                        case 0xd6:
+                            // SET 2, (IX + d)
+                            val8 = InstrSET(val8, 2);
+                            this.cycles += 5L;
+                            break;
+                        case 0xde:
+                            // SET 3, (IX + d)
+                            val8 = InstrSET(val8, 3);
+                            this.cycles += 5L;
+                            break;
+                        case 0xe6:
+                            // SET 4, (IX + d)
+                            val8 = InstrSET(val8, 4);
+                            this.cycles += 5L;
+                            break;
+                        case 0xee:
+                            // SET 5, (IX + d)
+                            val8 = InstrSET(val8, 5);
+                            this.cycles += 5L;
+                            break;
+                        case 0xf6:
+                            // SET 6, (IX + d)
+                            val8 = InstrSET(val8, 6);
+                            this.cycles += 5L;
+                            break;
+                        case 0xfe:
+                            // SET 7, (IX + d)
+                            val8 = InstrSET(val8, 7);
+                            this.cycles += 5L;
+                            break;
+                        default:
+                            return false;
+                    }
+                    WriteMem(addr, val8);
+                    return true;
+
+                case 0xe1:
+                    // POP IX
+                    this.regIX = InstrPOP();
+                    this.cycles++;
+                    return true;
+                case 0xe3:
+                    // EX (SP), IX
+                    this.regIX = InstrEXSP(this.regIX);
+                    this.cycles++;
+                    return true;
+                case 0xe5:
+                    // PUSH IX
+                    InstrPUSH(this.regIX);
+                    this.cycles++;
+                    return true;
+                case 0xe9:
+                    // JP (IX)
+                    this.regPC = this.regIX; //////////////////////////////////////////////////////////////////////////////////////
+                    this.cycles += 2L;
+                    return true;
+
+                case 0xf9:
+                    // LD SP, IX
+                    this.regSP = this.regIX;
+                    this.cycles += 4L;
+                    return true;
+            }
+
+            /* si on arrive ici, l'opcode rencontré était invalide ! */
+            return false;
         }
 
         private bool ExecEDopcode(byte opcode)
@@ -1905,8 +2353,435 @@ namespace EmulatorZ80
 
         private bool ExecFDopcode(byte opcode)
         {
-            ;
-            // TODO !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            byte val8;
+            ushort addr;
+
+            switch (opcode) {
+                case 0x09:
+                    // ADD IY, BC
+                    this.regIY = Do16bitAdd(this.regIY,
+                                            this.RegisterBC,
+                                            false);
+                    this.cycles += 9L;
+                    return true;
+
+                case 0x19:
+                    // ADD IY, DE
+                    this.regIY = Do16bitAdd(this.regIY,
+                                            this.RegisterDE,
+                                            false);
+                    this.cycles += 9L;
+                    return true;
+
+                case 0x21:
+                    // LD IY, #nnnn
+                    this.regIY = AddrModeImmediateExtendedValue();
+                    this.cycles += 2L;
+                    break;
+                case 0x22:
+                    // LD (nnnn), IY
+                    addr = AddrModeImmediateExtendedValue();
+                    WriteMem(addr, LoByte(this.regIY));
+                    addr++;
+                    WriteMem(addr, HiByte(this.regIY));
+                    this.cycles += 2L;
+                    return true;
+                case 0x23:
+                    // INC IY
+                    this.regIY = InstrINC16(this.regIY);
+                    this.cycles++;
+                    return true;
+                case 0x29:
+                    // ADD IY, IY
+                    this.regIY = Do16bitAdd(this.regIY,
+                                            this.regIY,
+                                            false);
+                    this.cycles += 9L;
+                    return true;
+                case 0x2a:
+                    // LD IY, (nnnn)
+                    addr = AddrModeImmediateExtendedValue();
+                    byte lo = ReadMem(addr);
+                    addr++;
+                    byte hi = ReadMem(addr);
+                    this.regIY = MakeWord(hi, lo);
+                    this.cycles += 2L;
+                    return true;
+                case 0x2b:
+                    // DEC IY
+                    this.regIY = InstrDEC16(this.regIY);
+                    this.cycles++;
+                    return true;
+
+                case 0x34:
+                    // INC (IY + d)
+                    addr = AddrModeIYindirectDisplacementAddress();
+                    val8 = ReadMem(addr);
+                    val8 = InstrINC(val8);
+                    WriteMem(addr, val8);
+                    this.cycles += 14L;
+                    return true;
+                case 0x35:
+                    // DEC (IY + d)
+                    addr = AddrModeIYindirectDisplacementAddress();
+                    val8 = ReadMem(addr);
+                    val8 = InstrDEC(val8);
+                    WriteMem(addr, val8);
+                    this.cycles += 14L;
+                    return true;
+                case 0x36:
+                    // LD (IY + d), #nn
+                    addr = AddrModeIYindirectDisplacementAddress();
+                    val8 = AddrModeImmediateValue();
+                    WriteMem(addr, val8);
+                    this.cycles += 7L;
+                    return true;
+                case 0x39:
+                    // ADD IY, SP
+                    this.regIY = Do16bitAdd(this.regIY,
+                                            this.regSP,
+                                            false);
+                    this.cycles += 9L;
+                    return true;
+
+                case 0x46:
+                    // LD B, (IY + d)
+                    this.regB = AddrModeIYindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+                case 0x4e:
+                    // LD C, (IY + d)
+                    this.regC = AddrModeIYindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+
+                case 0x56:
+                    // LD D, (IY + d)
+                    this.regD = AddrModeIYindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+                case 0x5e:
+                    // LD E, (IY + d)
+                    this.regE = AddrModeIYindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+
+                case 0x66:
+                    // LD H, (IY + d)
+                    this.regH = AddrModeIYindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+                case 0x6e:
+                    // LD L, (IY + d)
+                    this.regL = AddrModeIYindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+
+                case 0x70:
+                    // LD (IY + d), B
+                    addr = AddrModeIYindirectDisplacementAddress();
+                    WriteMem(addr, this.regB);
+                    this.cycles += 7L;
+                    return true;
+                case 0x71:
+                    // LD (IY + d), C
+                    addr = AddrModeIYindirectDisplacementAddress();
+                    WriteMem(addr, this.regC);
+                    this.cycles += 7L;
+                    return true;
+                case 0x72:
+                    // LD (IY + d), D
+                    addr = AddrModeIYindirectDisplacementAddress();
+                    WriteMem(addr, this.regD);
+                    this.cycles += 7L;
+                    return true;
+                case 0x73:
+                    // LD (IY + d), E
+                    addr = AddrModeIYindirectDisplacementAddress();
+                    WriteMem(addr, this.regE);
+                    this.cycles += 7L;
+                    return true;
+                case 0x74:
+                    // LD (IY + d), H
+                    addr = AddrModeIYindirectDisplacementAddress();
+                    WriteMem(addr, this.regH);
+                    this.cycles += 7L;
+                    return true;
+                case 0x75:
+                    // LD (IY + d), L
+                    addr = AddrModeIYindirectDisplacementAddress();
+                    WriteMem(addr, this.regL);
+                    this.cycles += 7L;
+                    return true;
+                case 0x77:
+                    // LD (IY + d), A
+                    addr = AddrModeIYindirectDisplacementAddress();
+                    WriteMem(addr, this.regA);
+                    this.cycles += 7L;
+                    return true;
+                case 0x7e:
+                    // LD A, (IY + d)
+                    this.regA = AddrModeIYindirectDisplacementValue();
+                    this.cycles += 7L;
+                    return true;
+
+                case 0x86:
+                    // ADD A, (IY + d)
+                    val8 = AddrModeIYindirectDisplacementValue();
+                    this.regA = Do8bitAdd(this.regA, val8, false);
+                    this.cycles += 7L;
+                    return true;
+                case 0x8e:
+                    // ADC A, (IY + d)
+                    val8 = AddrModeIYindirectDisplacementValue();
+                    this.regA = Do8bitAdd(this.regA, val8, true);
+                    this.cycles += 7L;
+                    return true;
+
+                case 0x96:
+                    // SUB A, (IY + d)
+                    val8 = AddrModeIYindirectDisplacementValue();
+                    this.regA = Do8bitSub(this.regA, val8, false);
+                    this.cycles += 7L;
+                    return true;
+                case 0x9e:
+                    // SBC A, (IY + d)
+                    val8 = AddrModeIYindirectDisplacementValue();
+                    this.regA = Do8bitSub(this.regA, val8, true);
+                    this.cycles += 7L;
+                    return true;
+
+                case 0xa6:
+                    // AND A, (IY + d)
+                    val8 = AddrModeIYindirectDisplacementValue();
+                    InstrANDA(val8);
+                    this.cycles += 6L;
+                    return true;
+                case 0xae:
+                    // XOR A, (IY + d)
+                    val8 = AddrModeIYindirectDisplacementValue();
+                    InstrXORA(val8);
+                    this.cycles += 6L;
+                    return true;
+
+                case 0xb6:
+                    // OR A, (IY + d)
+                    val8 = AddrModeIYindirectDisplacementValue();
+                    InstrORA(val8);
+                    this.cycles += 6L;
+                    return true;
+                case 0xbe:
+                    // CP A, (IY + d)
+                    val8 = AddrModeIYindirectDisplacementValue();
+                    Do8bitSub(this.regA, val8, false);
+                    this.cycles += 7L;
+                    return true;
+
+
+                case 0xcb:
+                    // rotations, décalages et manipulations
+                    // bit-à-bit via IY
+                    addr = AddrModeIYindirectDisplacementAddress();
+                    val8 = ReadMem(addr);
+                    byte subOpcode = ReadMem(this.regPC);
+                    this.regPC++;
+                    switch (subOpcode) {
+                        case 0x06:
+                            // RLC (IY + d)
+                            val8 = InstrRLC(val8, true);
+                            this.cycles += 5L;
+                            break;
+                        case 0x0e:
+                            // RRC (IY + d)
+                            val8 = InstrRRC(val8, true);
+                            this.cycles += 5L;
+                            break;
+                        case 0x16:
+                            // RL (IY + d)
+                            val8 = InstrRL(val8, true);
+                            this.cycles += 5L;
+                            break;
+                        case 0x1e:
+                            // RR (IY + d)
+                            val8 = InstrRR(val8, true);
+                            this.cycles += 5L;
+                            break;
+                        case 0x26:
+                            // SLA (IY + d)
+                            val8 = InstrSL(val8);
+                            this.cycles += 5L;
+                            break;
+                        case 0x2e:
+                            // SRA (IY + d)
+                            val8 = InstrSRA(val8);
+                            this.cycles += 5L;
+                            break;
+                        case 0x36:
+                            // SLL (IY + d)
+                            val8 = InstrSL(val8);
+                            this.cycles += 5L;
+                            break;
+                        case 0x3e:
+                            // SRL (IY + d)
+                            val8 = InstrSRL(val8);
+                            this.cycles += 5L;
+                            break;
+                        case 0x46:
+                            // BIT 0, (IY + d)
+                            InstrBIT(val8, 0);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x4e:
+                            // BIT 1, (IY + d)
+                            InstrBIT(val8, 1);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x56:
+                            // BIT 2, (IY + d)
+                            InstrBIT(val8, 2);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x5e:
+                            // BIT 3, (IY + d)
+                            InstrBIT(val8, 3);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x66:
+                            // BIT 4, (IY + d)
+                            InstrBIT(val8, 4);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x6e:
+                            // BIT 5, (IY + d)
+                            InstrBIT(val8, 5);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x76:
+                            // BIT 6, (IY + d)
+                            InstrBIT(val8, 6);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x7e:
+                            // BIT 7, (IY + d)
+                            InstrBIT(val8, 7);
+                            this.cycles += 5L;
+                            return true;
+                        case 0x86:
+                            // RES 0, (IY + d)
+                            val8 = InstrRES(val8, 0);
+                            this.cycles += 5L;
+                            break;
+                        case 0x8e:
+                            // RES 1, (IY + d)
+                            val8 = InstrRES(val8, 1);
+                            this.cycles += 5L;
+                            break;
+                        case 0x96:
+                            // RES 2, (IY + d)
+                            val8 = InstrRES(val8, 2);
+                            this.cycles += 5L;
+                            break;
+                        case 0x9e:
+                            // RES 3, (IY + d)
+                            val8 = InstrRES(val8, 3);
+                            this.cycles += 5L;
+                            break;
+                        case 0xa6:
+                            // RES 4, (IY + d)
+                            val8 = InstrRES(val8, 4);
+                            this.cycles += 5L;
+                            break;
+                        case 0xae:
+                            // RES 5, (IY + d)
+                            val8 = InstrRES(val8, 5);
+                            this.cycles += 5L;
+                            break;
+                        case 0xb6:
+                            // RES 6, (IY + d)
+                            val8 = InstrRES(val8, 6);
+                            this.cycles += 5L;
+                            break;
+                        case 0xbe:
+                            // RES 7, (IY + d)
+                            val8 = InstrRES(val8, 7);
+                            this.cycles += 5L;
+                            break;
+                        case 0xc6:
+                            // SET 0, (IY + d)
+                            val8 = InstrSET(val8, 0);
+                            this.cycles += 5L;
+                            break;
+                        case 0xce:
+                            // SET 1, (IY + d)
+                            val8 = InstrSET(val8, 1);
+                            this.cycles += 5L;
+                            break;
+                        case 0xd6:
+                            // SET 2, (IY + d)
+                            val8 = InstrSET(val8, 2);
+                            this.cycles += 5L;
+                            break;
+                        case 0xde:
+                            // SET 3, (IY + d)
+                            val8 = InstrSET(val8, 3);
+                            this.cycles += 5L;
+                            break;
+                        case 0xe6:
+                            // SET 4, (IY + d)
+                            val8 = InstrSET(val8, 4);
+                            this.cycles += 5L;
+                            break;
+                        case 0xee:
+                            // SET 5, (IY + d)
+                            val8 = InstrSET(val8, 5);
+                            this.cycles += 5L;
+                            break;
+                        case 0xf6:
+                            // SET 6, (IY + d)
+                            val8 = InstrSET(val8, 6);
+                            this.cycles += 5L;
+                            break;
+                        case 0xfe:
+                            // SET 7, (IY + d)
+                            val8 = InstrSET(val8, 7);
+                            this.cycles += 5L;
+                            break;
+                        default:
+                            return false;
+                    }
+                    WriteMem(addr, val8);
+                    return true;
+
+                case 0xe1:
+                    // POP IY
+                    this.regIY = InstrPOP();
+                    this.cycles++;
+                    return true;
+                case 0xe3:
+                    // EX (SP), IY
+                    this.regIY = InstrEXSP(this.regIY);
+                    this.cycles++;
+                    return true;
+                case 0xe5:
+                    // PUSH IY
+                    InstrPUSH(this.regIY);
+                    this.cycles++;
+                    return true;
+                case 0xe9:
+                    // JP (IY)
+                    this.regPC = this.regIY; //////////////////////////////////////////////////////////////////////////////////////
+                    this.cycles += 2L;
+                    return true;
+
+                case 0xf9:
+                    // LD SP, IY
+                    this.regSP = this.regIY;
+                    this.cycles += 4L;
+                    return true;
+            }
+
+            /* si on arrive ici, l'opcode rencontré était invalide ! */
+            return false;
         }
 
         private bool ExecStandardOpcode(byte opcode)
